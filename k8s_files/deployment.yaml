@@ -1,0 +1,23 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: emierp-app
+  labels:
+    app: emierp-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: emierp-app
+  template:
+    metadata:
+      labels:
+        app: emierp-app
+    spec:
+      containers:
+      - name: emierp-container
+        image: 309395755719.dkr.ecr.us-east-1.amazonaws.com/emierp:latest
+        ports:
+        - containerPort: 3000
+...
