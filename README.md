@@ -30,7 +30,7 @@ This project demonstrates deploying an emierp clone using a set of DevOps tools 
 1. **Clone the Repository** (Open Command Prompt & run below):
    ```bash
    git clone https://github.com/ibrahimimohamed2108/erp-clone.git
-   cd DevopsProject2
+   cd erp-clone
    code .   # this command will open VS code in backend
    ```
 2. **Initialize and Apply Terraform**:
