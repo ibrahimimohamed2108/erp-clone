@@ -1,0 +1,11 @@
+.home {
+  flex: 1;
+  padding: 24px;
+}
+
+.dashboard-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 20px;
+}

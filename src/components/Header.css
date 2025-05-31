@@ -1,0 +1,16 @@
+.header {
+  background-color: #002b5c;
+  color: white;
+  padding: 16px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.header-logo {
+  height: 50px;
+}
+
+.header-title {
+  font-size: 1.8rem;
+}
