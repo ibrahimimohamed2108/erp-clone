@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
       - name: emierp-container
-        image: 309395755719.dkr.ecr.us-east-1.amazonaws.com/emierp:latest
+        image: 409556542010.dkr.ecr.us-east-1.amazonaws.com/emierp:latest
         ports:
         - containerPort: 3000
 ...
