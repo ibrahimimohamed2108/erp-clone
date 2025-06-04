@@ -80,13 +80,13 @@ resource "aws_security_group" "my-sg" {
   }  
 
   # Port 9000 is required for SonarQube
-  ingress {
-    description     = "SonarQube Port"
-    from_port       = 9000
-    to_port         = 9000
-    protocol        = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }  
+  #ingress {
+  #  description     = "SonarQube Port"
+  #  from_port       = 9000
+  #  to_port         = 9000
+  #  protocol        = "tcp"
+  #  cidr_blocks = ["0.0.0.0/0"]
+  #}  
 
   # Port 9090 is required for Prometheus
   ingress {
@@ -181,7 +181,7 @@ resource "aws_instance" "my-ec2" {
       "docker --version",
 
       # Install SonarQube (as container)
-      "docker run -d --name sonar -p 9000:9000 sonarqube:lts-community",
+      #"docker run -d --name sonar -p 9000:9000 sonarqube:lts-community",
 
       # Install Trivy
       # Ref: https://aquasecurity.github.io/trivy/v0.18.3/installation/
@@ -241,8 +241,8 @@ resource "aws_instance" "my-ec2" {
       # Output
       "echo 'Access Jenkins Server here --> http://'$ip':8080'",
       "echo 'Jenkins Initial Password: '$pass''",
-      "echo 'Access SonarQube Server here --> http://'$ip':9000'",
-      "echo 'SonarQube Username & Password: admin'",
+      #"echo 'Access SonarQube Server here --> http://'$ip':9000'",
+      #"echo 'SonarQube Username & Password: admin'",
     ]
   }
 }  
