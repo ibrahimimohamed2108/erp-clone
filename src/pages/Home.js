@@ -10,6 +10,7 @@ const Home = () => (
       <DashboardCard title="Professors" description="Handle professor data and schedules." />
       <DashboardCard title="Courses" description="Control course offerings and materials." />
       <DashboardCard title="Finance" description="Track tuition, budgeting, and expenses." />
+      <DashboardCard title="webhooktest0" description="Configure system settings and preferences." />
     </div>
   </main>
 );
