@@ -1,5 +1,7 @@
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-
+terraform_code/eks_code/.terraform/modules/
+terraform_code/ec2_server/key.pem
+# This file is managed by Terraform. Do not edit it manually.
 # dependencies
 /node_modules
 /.pnp
