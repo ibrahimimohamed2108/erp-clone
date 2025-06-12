@@ -11,6 +11,7 @@ const Home = () => (
       <DashboardCard title="Courses" description="Control course offerings and materials." />
       <DashboardCard title="Finance" description="Track tuition, budgeting, and expenses." />
       <DashboardCard title="webhooktest0" description="Configure system settings and preferences." />
+      <DashboardCard title="automatic + notification" description="Configure system settings and preferences." />
     </div>
   </main>
 );
