@@ -1,222 +1,392 @@
-// Method to update stage status map (defined OUTSIDE pipeline block)
-def updateStageStatus(Map stageStatusMap, String stageName, String status) {
-    stageStatusMap[stageName] = status
+// Helper methods defined outside the pipeline block
+def stageResults = [:]
+
+def recordStageResult(stageName, status) {
+    stageResults[stageName] = status
+    echo "Stage '${stageName}' completed with status: ${status}"
 }
 
-// Method to build summary message of stages
-def buildStageSummary(Map stageStatusMap) {
-    def summary = "Build Stage Status Summary:\n"
-    stageStatusMap.each { stage, status ->
-        summary += "- ${stage}: ${status}\n"
+def executeStageWithTracking(stageName, closure) {
+    try {
+        closure()
+        recordStageResult(stageName, 'SUCCESS')
+    } catch (Exception e) {
+        recordStageResult(stageName, 'FAILED')
+        throw e
     }
-    return summary
+}
+
+def generateEmailBody(buildStatus, stageResults) {
+    def emailBody = """
+<html>
+<head>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .header { background-color: ${buildStatus == 'SUCCESS' ? '#d4edda' : '#f8d7da'}; 
+                 color: ${buildStatus == 'SUCCESS' ? '#155724' : '#721c24'}; 
+                 padding: 15px; border-radius: 5px; margin-bottom: 20px; }
+        .summary-table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+        .summary-table th, .summary-table td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+        .summary-table th { background-color: #f2f2f2; font-weight: bold; }
+        .success { color: #28a745; font-weight: bold; }
+        .failed { color: #dc3545; font-weight: bold; }
+        .skipped { color: #6c757d; font-weight: bold; }
+        .build-info { background-color: #e9ecef; padding: 15px; border-radius: 5px; margin: 20px 0; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h2>🚀 Jenkins Pipeline Execution Report</h2>
+        <p><strong>Build Status:</strong> ${buildStatus}</p>
+    </div>
+    
+    <div class="build-info">
+        <h3>📋 Build Information</h3>
+        <ul>
+            <li><strong>Job Name:</strong> ${env.JOB_NAME}</li>
+            <li><strong>Build Number:</strong> #${env.BUILD_NUMBER}</li>
+            <li><strong>Build URL:</strong> <a href="${env.BUILD_URL}">${env.BUILD_URL}</a></li>
+            <li><strong>Repository:</strong> emierp</li>
+            <li><strong>Branch:</strong> main</li>
+            <li><strong>Duration:</strong> ${currentBuild.durationString}</li>
+            <li><strong>Started by:</strong> ${env.BUILD_USER_ID ?: 'System'}</li>
+        </ul>
+    </div>
+    
+    <h3>📊 Stage Execution Summary</h3>
+    <table class="summary-table">
+        <thead>
+            <tr>
+                <th>Stage Name</th>
+                <th>Status</th>
+                <th>Description</th>
+            </tr>
+        </thead>
+        <tbody>
+"""
+    
+    def stageDescriptions = [
+        'Git Checkout': 'Source code checkout from GitHub repository',
+        'Install npm': 'Node.js dependencies installation',
+        'Trivy Scan': 'Security vulnerability scanning',
+        'Build Docker Image': 'Docker image build process',
+        'Create ECR repo': 'AWS ECR repository creation/verification',
+        'Login to ECR & tag image': 'ECR authentication and image tagging',
+        'Push image to ECR': 'Docker image push to ECR registry',
+        'Cleanup Images': 'Local Docker images cleanup'
+    ]
+    
+    stageResults.each { stageName, status ->
+        def statusClass = status.toLowerCase()
+        def statusIcon = status == 'SUCCESS' ? '✅' : (status == 'FAILED' ? '❌' : '⏭️')
+        emailBody += """
+            <tr>
+                <td><strong>${stageName}</strong></td>
+                <td class="${statusClass}">${statusIcon} ${status}</td>
+                <td>${stageDescriptions[stageName] ?: 'Pipeline stage execution'}</td>
+            </tr>
+        """
+    }
+    
+    emailBody += """
+        </tbody>
+    </table>
+    
+    <div style="margin-top: 30px; padding: 15px; background-color: #f8f9fa; border-radius: 5px;">
+        <h4>🔧 Next Steps:</h4>
+        <ul>
+"""
+    
+    if (buildStatus == 'SUCCESS') {
+        emailBody += """
+            <li>✅ Your application has been successfully deployed to ECR</li>
+            <li>🚀 You can now proceed with your deployment to staging/production</li>
+            <li>📊 Review the build logs for any warnings or optimization opportunities</li>
+        """
+    } else {
+        emailBody += """
+            <li>🔍 Check the failed stage(s) in the Jenkins console output</li>
+            <li>🛠️ Fix the issues and trigger a new build</li>
+            <li>📞 Contact the DevOps team if you need assistance</li>
+        """
+    }
+    
+    emailBody += """
+        </ul>
+    </div>
+    
+    <div style="margin-top: 20px; font-size: 12px; color: #6c757d;">
+        <p>This is an automated message from Jenkins CI/CD Pipeline. Please do not reply to this email.</p>
+        <p>Generated on: ${new Date().format('yyyy-MM-dd HH:mm:ss')} UTC</p>
+    </div>
+</body>
+</html>
+"""
+    return emailBody
 }
 
 pipeline {
     agent any
-
+    
     parameters {
         string(name: 'ECR_REPO_NAME', defaultValue: 'emierp', description: 'Enter repository name')
         string(name: 'AWS_ACCOUNT_ID', defaultValue: '409556542010', description: 'Enter AWS Account ID')
     }
-
+    
     tools {
         jdk 'JDK'
         nodejs 'NodeJS'
     }
-
+    
     environment {
-        SMTP_SERVER = 'smtp.gmail.com'
-        SMTP_PORT = '587'
-        SMTP_USERNAME = credentials('gmail-username')  // Jenkins credential ID for Gmail user
-        SMTP_PASSWORD = credentials('gmail-app-password')  // Jenkins credential ID for Gmail app password
-        RECIPIENTS = 'ibrahimi.mohamed@student.emi.ac.ma,simparamohamedelbechir7@gmail.com'
-        FROM_EMAIL = SMTP_USERNAME
-        CHARSET = 'UTF-8'
+        // SCANNER_HOME = tool 'SonarQube Scanner'
+        EMAIL_RECIPIENTS = 'ibrahimi.mohamed@student.emi.ac.ma,simparamohamedelbechir7@gmail.com'
     }
-
+    
     stages {
         stage('1. Git Checkout') {
             steps {
                 script {
-                    try {
+                    executeStageWithTracking('Git Checkout') {
                         git branch: 'main', url: 'https://github.com/ibrahimimohamed2108/erp-clone.git'
-                        updateStageStatus(stageStatusMap, 'Git Checkout', 'SUCCESS')
-                    } catch (e) {
-                        updateStageStatus(stageStatusMap, 'Git Checkout', 'FAILURE')
-                        throw e
                     }
                 }
             }
         }
-
+        
+        /*stage('2. SonarQube Analysis') {
+            steps {
+                script {
+                    executeStageWithTracking('SonarQube Analysis') {
+                        withSonarQubeEnv ('sonar-server') {
+                            sh """
+                            $SCANNER_HOME/bin/sonar-scanner \
+                            -Dsonar.projectName=emierp \
+                            -Dsonar.projectKey=emierp
+                            """
+                        }
+                    }
+                }
+            }
+        }
+        
+        stage('3. Quality Gate') {
+            steps {
+                script {
+                    executeStageWithTracking('Quality Gate') {
+                        waitForQualityGate abortPipeline: false, 
+                        credentialsId: 'sonar-token'
+                    }
+                }
+            }
+        }*/
+        
         stage('4. Install npm') {
             steps {
                 script {
-                    try {
+                    executeStageWithTracking('Install npm') {
                         sh "npm install"
-                        updateStageStatus(stageStatusMap, 'Install npm', 'SUCCESS')
-                    } catch (e) {
-                        updateStageStatus(stageStatusMap, 'Install npm', 'FAILURE')
-                        throw e
                     }
                 }
             }
         }
-
+        
         stage('5. Trivy Scan') {
             steps {
                 script {
-                    try {
+                    executeStageWithTracking('Trivy Scan') {
                         sh "trivy fs . > trivy.txt"
-                        updateStageStatus(stageStatusMap, 'Trivy Scan', 'SUCCESS')
-                    } catch (e) {
-                        updateStageStatus(stageStatusMap, 'Trivy Scan', 'FAILURE')
-                        throw e
+                        
+                        // Archive the scan results
+                        archiveArtifacts artifacts: 'trivy.txt', 
+                                       allowEmptyArchive: true,
+                                       fingerprint: true
                     }
                 }
             }
         }
-
+        
         stage('6. Build Docker Image') {
             steps {
                 script {
-                    try {
+                    executeStageWithTracking('Build Docker Image') {
                         sh "docker build -t ${params.ECR_REPO_NAME} ."
-                        updateStageStatus(stageStatusMap, 'Build Docker Image', 'SUCCESS')
-                    } catch (e) {
-                        updateStageStatus(stageStatusMap, 'Build Docker Image', 'FAILURE')
-                        throw e
+                        
+                        // Verify image was built successfully
+                        sh "docker images ${params.ECR_REPO_NAME}"
                     }
                 }
             }
         }
-
+        
         stage('7. Create ECR repo') {
             steps {
                 script {
-                    try {
-                        withCredentials([string(credentialsId: 'access-key', variable: 'AWS_ACCESS_KEY'), 
-                                         string(credentialsId: 'secret-key', variable: 'AWS_SECRET_KEY')]) {
+                    executeStageWithTracking('Create ECR repo') {
+                        withCredentials([
+                            string(credentialsId: 'access-key', variable: 'AWS_ACCESS_KEY'), 
+                            string(credentialsId: 'secret-key', variable: 'AWS_SECRET_KEY')
+                        ]) {
                             sh """
                             aws configure set aws_access_key_id $AWS_ACCESS_KEY
                             aws configure set aws_secret_access_key $AWS_SECRET_KEY
-                            aws ecr describe-repositories --repository-names ${params.ECR_REPO_NAME} --region us-east-1 || \
-                            aws ecr create-repository --repository-name ${params.ECR_REPO_NAME} --region us-east-1
+                            aws configure set region us-east-1
+                            aws configure set output json
+                            
+                            # Check if repository exists, create if it doesn't
+                            if ! aws ecr describe-repositories --repository-names ${params.ECR_REPO_NAME} --region us-east-1 >/dev/null 2>&1; then
+                                echo "Creating ECR repository: ${params.ECR_REPO_NAME}"
+                                aws ecr create-repository --repository-name ${params.ECR_REPO_NAME} --region us-east-1
+                            else
+                                echo "ECR repository ${params.ECR_REPO_NAME} already exists"
+                            fi
                             """
                         }
-                        updateStageStatus(stageStatusMap, 'Create ECR repo', 'SUCCESS')
-                    } catch (e) {
-                        updateStageStatus(stageStatusMap, 'Create ECR repo', 'FAILURE')
-                        throw e
                     }
                 }
             }
         }
-
+        
         stage('8. Login to ECR & tag image') {
             steps {
                 script {
-                    try {
-                        withCredentials([string(credentialsId: 'access-key', variable: 'AWS_ACCESS_KEY'), 
-                                         string(credentialsId: 'secret-key', variable: 'AWS_SECRET_KEY')]) {
+                    executeStageWithTracking('Login to ECR & tag image') {
+                        withCredentials([
+                            string(credentialsId: 'access-key', variable: 'AWS_ACCESS_KEY'), 
+                            string(credentialsId: 'secret-key', variable: 'AWS_SECRET_KEY')
+                        ]) {
                             sh """
+                            # Login to ECR
                             aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin ${params.AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com
+                            
+                            # Tag images
                             docker tag ${params.ECR_REPO_NAME} ${params.AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/${params.ECR_REPO_NAME}:${BUILD_NUMBER}
                             docker tag ${params.ECR_REPO_NAME} ${params.AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/${params.ECR_REPO_NAME}:latest
+                            
+                            # Verify tags
+                            echo "Tagged images:"
+                            docker images ${params.AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/${params.ECR_REPO_NAME}
                             """
                         }
-                        updateStageStatus(stageStatusMap, 'Login to ECR & tag image', 'SUCCESS')
-                    } catch (e) {
-                        updateStageStatus(stageStatusMap, 'Login to ECR & tag image', 'FAILURE')
-                        throw e
                     }
                 }
             }
         }
-
+        
         stage('9. Push image to ECR') {
             steps {
                 script {
-                    try {
-                        withCredentials([string(credentialsId: 'access-key', variable: 'AWS_ACCESS_KEY'), 
-                                         string(credentialsId: 'secret-key', variable: 'AWS_SECRET_KEY')]) {
+                    executeStageWithTracking('Push image to ECR') {
+                        withCredentials([
+                            string(credentialsId: 'access-key', variable: 'AWS_ACCESS_KEY'), 
+                            string(credentialsId: 'secret-key', variable: 'AWS_SECRET_KEY')
+                        ]) {
                             sh """
+                            echo "Pushing image with build number: ${BUILD_NUMBER}"
                             docker push ${params.AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/${params.ECR_REPO_NAME}:${BUILD_NUMBER}
+                            
+                            echo "Pushing latest image"
                             docker push ${params.AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/${params.ECR_REPO_NAME}:latest
+                            
+                            echo "Images pushed successfully to ECR"
                             """
                         }
-                        updateStageStatus(stageStatusMap, 'Push image to ECR', 'SUCCESS')
-                    } catch (e) {
-                        updateStageStatus(stageStatusMap, 'Push image to ECR', 'FAILURE')
-                        throw e
                     }
                 }
             }
         }
-
+        
         stage('10. Cleanup Images') {
             steps {
                 script {
-                    try {
+                    executeStageWithTracking('Cleanup Images') {
                         sh """
-                        docker rmi ${params.AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/${params.ECR_REPO_NAME}:${BUILD_NUMBER}
-                        docker rmi ${params.AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/${params.ECR_REPO_NAME}:latest
+                        echo "Cleaning up local Docker images..."
+                        
+                        # Remove tagged images
+                        docker rmi ${params.AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/${params.ECR_REPO_NAME}:${BUILD_NUMBER} || true
+                        docker rmi ${params.AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/${params.ECR_REPO_NAME}:latest || true
+                        docker rmi ${params.ECR_REPO_NAME} || true
+                        
+                        # Clean up dangling images
+                        docker image prune -f || true
+                        
+                        echo "Remaining images:"
                         docker images
                         """
-                        updateStageStatus(stageStatusMap, 'Cleanup Images', 'SUCCESS')
-                    } catch (e) {
-                        updateStageStatus(stageStatusMap, 'Cleanup Images', 'FAILURE')
-                        throw e
                     }
                 }
             }
         }
     }
-
+    
     post {
         always {
             script {
-                // Send email regardless of build result
+                // Determine overall build status
+                def buildStatus = currentBuild.currentResult ?: 'SUCCESS'
                 
-                // Initialize the stage status map if not already initialized (e.g. if failure before any stage)
-                if (!binding.hasVariable('stageStatusMap')) {
-                    stageStatusMap = [:]
+                // Mark any unexecuted stages as SKIPPED
+                def expectedStages = [
+                    'Git Checkout', 'Install npm', 'Trivy Scan', 
+                    'Build Docker Image', 'Create ECR repo', 
+                    'Login to ECR & tag image', 'Push image to ECR', 'Cleanup Images'
+                ]
+                
+                expectedStages.each { stageName ->
+                    if (!stageResults.containsKey(stageName)) {
+                        stageResults[stageName] = 'SKIPPED'
+                    }
                 }
-
-                // Compose the summary
-                def summary = buildStageSummary(stageStatusMap)
-
-                // Compose the email body
-                def body = """
-                Hello,
-
-                The Jenkins build #${BUILD_NUMBER} for repository '${params.ECR_REPO_NAME}' has finished with status: ${currentBuild.currentResult}.
-
-                ${summary}
-
-                Please check the Jenkins job for more details.
-
-                Regards,
-                Jenkins CI
-                """
-
-                // Send email using SMTP (Gmail)
-                // Requires Jenkins Email Extension plugin configured to use SMTP or custom code below
-
-                // Example using Jenkins 'emailext' plugin:
-                emailext(
-                    subject: "Jenkins Build #${BUILD_NUMBER} - ${currentBuild.currentResult}",
-                    body: body,
-                    to: env.RECIPIENTS,
-                    from: env.FROM_EMAIL,
-                    mimeType: 'text/plain',
-                    charset: env.CHARSET
-                )
+                
+                // Generate email subject
+                def emailSubject = "[Jenkins] ${buildStatus}: ${env.JOB_NAME} - Build #${env.BUILD_NUMBER}"
+                
+                // Generate email body
+                def emailBody = generateEmailBody(buildStatus, stageResults)
+                
+                // Send email notification
+                try {
+                    emailext (
+                        subject: emailSubject,
+                        body: emailBody,
+                        mimeType: 'text/html',
+                        to: env.EMAIL_RECIPIENTS,
+                        replyTo: 'noreply@yourcompany.com',
+                        attachLog: buildStatus != 'SUCCESS', // Attach logs only if build failed
+                        compressLog: true
+                    )
+                    echo "Email notification sent successfully to: ${env.EMAIL_RECIPIENTS}"
+                } catch (Exception e) {
+                    echo "Failed to send email notification: ${e.getMessage()}"
+                    // Don't fail the build if email sending fails
+                }
+                
+                // Print summary to console
+                echo "\n" + "="*50
+                echo "PIPELINE EXECUTION SUMMARY"
+                echo "="*50
+                echo "Build Status: ${buildStatus}"
+                echo "Build Number: ${env.BUILD_NUMBER}"
+                echo "Job Name: ${env.JOB_NAME}"
+                echo "\nStage Results:"
+                stageResults.each { stageName, status ->
+                    echo "  ${stageName}: ${status}"
+                }
+                echo "="*50
             }
+        }
+        
+        success {
+            echo "🎉 Pipeline completed successfully! Docker image pushed to ECR."
+        }
+        
+        failure {
+            echo "❌ Pipeline failed. Check the logs and stage results above."
+        }
+        
+        unstable {
+            echo "⚠️ Pipeline completed with warnings. Please review the results."
         }
     }
 }
-
-// Initialize stageStatusMap globally before pipeline execution
-def stageStatusMap = [:]
