@@ -1,22 +1,22 @@
-// Helper methods defined outside the pipeline block
-def stageResults = [:]
+// Initialize stageResults in global binding scope
+stageResults = [:]
 
-def recordStageResult(stageName, status) {
-    stageResults[stageName] = status
+def recordStageResult(stageName, status, stageResultsMap) {
+    stageResultsMap[stageName] = status
     echo "Stage '${stageName}' completed with status: ${status}"
 }
 
-def executeStageWithTracking(stageName, closure) {
+def executeStageWithTracking(stageName, closure, stageResultsMap) {
     try {
         closure()
-        recordStageResult(stageName, 'SUCCESS')
+        recordStageResult(stageName, 'SUCCESS', stageResultsMap)
     } catch (Exception e) {
-        recordStageResult(stageName, 'FAILED')
+        recordStageResult(stageName, 'FAILED', stageResultsMap)
         throw e
     }
 }
 
-def generateEmailBody(buildStatus, stageResults) {
+def generateEmailBody(buildStatus, stageResultsMap) {
     def emailBody = """
 <html>
 <head>
@@ -76,7 +76,7 @@ def generateEmailBody(buildStatus, stageResults) {
         'Cleanup Images': 'Local Docker images cleanup'
     ]
     
-    stageResults.each { stageName, status ->
+    stageResultsMap.each { stageName, status ->
         def statusClass = status.toLowerCase()
         def statusIcon = status == 'SUCCESS' ? '✅' : (status == 'FAILED' ? '❌' : '⏭️')
         emailBody += """
@@ -147,9 +147,9 @@ pipeline {
         stage('1. Git Checkout') {
             steps {
                 script {
-                    executeStageWithTracking('Git Checkout') {
+                    executeStageWithTracking('Git Checkout', {
                         git branch: 'main', url: 'https://github.com/ibrahimimohamed2108/erp-clone.git'
-                    }
+                    }, stageResults)
                 }
             }
         }
@@ -157,7 +157,7 @@ pipeline {
         /*stage('2. SonarQube Analysis') {
             steps {
                 script {
-                    executeStageWithTracking('SonarQube Analysis') {
+                    executeStageWithTracking('SonarQube Analysis', {
                         withSonarQubeEnv ('sonar-server') {
                             sh """
                             $SCANNER_HOME/bin/sonar-scanner \
@@ -165,7 +165,7 @@ pipeline {
                             -Dsonar.projectKey=emierp
                             """
                         }
-                    }
+                    }, stageResults)
                 }
             }
         }
@@ -173,10 +173,10 @@ pipeline {
         stage('3. Quality Gate') {
             steps {
                 script {
-                    executeStageWithTracking('Quality Gate') {
+                    executeStageWithTracking('Quality Gate', {
                         waitForQualityGate abortPipeline: false, 
                         credentialsId: 'sonar-token'
-                    }
+                    }, stageResults)
                 }
             }
         }*/
@@ -184,9 +184,9 @@ pipeline {
         stage('4. Install npm') {
             steps {
                 script {
-                    executeStageWithTracking('Install npm') {
+                    executeStageWithTracking('Install npm', {
                         sh "npm install"
-                    }
+                    }, stageResults)
                 }
             }
         }
@@ -194,14 +194,14 @@ pipeline {
         stage('5. Trivy Scan') {
             steps {
                 script {
-                    executeStageWithTracking('Trivy Scan') {
+                    executeStageWithTracking('Trivy Scan', {
                         sh "trivy fs . > trivy.txt"
                         
                         // Archive the scan results
                         archiveArtifacts artifacts: 'trivy.txt', 
                                        allowEmptyArchive: true,
                                        fingerprint: true
-                    }
+                    }, stageResults)
                 }
             }
         }
@@ -209,12 +209,12 @@ pipeline {
         stage('6. Build Docker Image') {
             steps {
                 script {
-                    executeStageWithTracking('Build Docker Image') {
+                    executeStageWithTracking('Build Docker Image', {
                         sh "docker build -t ${params.ECR_REPO_NAME} ."
                         
                         // Verify image was built successfully
                         sh "docker images ${params.ECR_REPO_NAME}"
-                    }
+                    }, stageResults)
                 }
             }
         }
@@ -222,7 +222,7 @@ pipeline {
         stage('7. Create ECR repo') {
             steps {
                 script {
-                    executeStageWithTracking('Create ECR repo') {
+                    executeStageWithTracking('Create ECR repo', {
                         withCredentials([
                             string(credentialsId: 'access-key', variable: 'AWS_ACCESS_KEY'), 
                             string(credentialsId: 'secret-key', variable: 'AWS_SECRET_KEY')
@@ -242,7 +242,7 @@ pipeline {
                             fi
                             """
                         }
-                    }
+                    }, stageResults)
                 }
             }
         }
@@ -250,7 +250,7 @@ pipeline {
         stage('8. Login to ECR & tag image') {
             steps {
                 script {
-                    executeStageWithTracking('Login to ECR & tag image') {
+                    executeStageWithTracking('Login to ECR & tag image', {
                         withCredentials([
                             string(credentialsId: 'access-key', variable: 'AWS_ACCESS_KEY'), 
                             string(credentialsId: 'secret-key', variable: 'AWS_SECRET_KEY')
@@ -268,7 +268,7 @@ pipeline {
                             docker images ${params.AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/${params.ECR_REPO_NAME}
                             """
                         }
-                    }
+                    }, stageResults)
                 }
             }
         }
@@ -276,7 +276,7 @@ pipeline {
         stage('9. Push image to ECR') {
             steps {
                 script {
-                    executeStageWithTracking('Push image to ECR') {
+                    executeStageWithTracking('Push image to ECR', {
                         withCredentials([
                             string(credentialsId: 'access-key', variable: 'AWS_ACCESS_KEY'), 
                             string(credentialsId: 'secret-key', variable: 'AWS_SECRET_KEY')
@@ -291,7 +291,7 @@ pipeline {
                             echo "Images pushed successfully to ECR"
                             """
                         }
-                    }
+                    }, stageResults)
                 }
             }
         }
@@ -299,7 +299,7 @@ pipeline {
         stage('10. Cleanup Images') {
             steps {
                 script {
-                    executeStageWithTracking('Cleanup Images') {
+                    executeStageWithTracking('Cleanup Images', {
                         sh """
                         echo "Cleaning up local Docker images..."
                         
@@ -314,7 +314,7 @@ pipeline {
                         echo "Remaining images:"
                         docker images
                         """
-                    }
+                    }, stageResults)
                 }
             }
         }
