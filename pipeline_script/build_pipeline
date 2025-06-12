@@ -11,9 +11,9 @@ pipeline {
         nodejs 'NodeJS'
     }
 
-    environment {
+    //environment {
         // Uncomment if using Sonar: SCANNER_HOME = tool 'SonarQube Scanner'
-    }
+    //}
 
     stages {
         stage('1. Git Checkout') {
