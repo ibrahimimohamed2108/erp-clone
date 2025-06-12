@@ -1,4 +1,155 @@
-// Helper methods defined outside the pipeline block
+pipeline {
+    agent any
+
+    parameters {
+        string(name: 'ECR_REPO_NAME', defaultValue: 'emierp', description: 'Enter repository name')
+        string(name: 'AWS_ACCOUNT_ID', defaultValue: '409556542010', description: 'Enter AWS Account ID')
+    }
+
+    tools {
+        jdk 'JDK'
+        nodejs 'NodeJS'
+    }
+
+    environment {
+        // Uncomment if using Sonar: SCANNER_HOME = tool 'SonarQube Scanner'
+    }
+
+    stages {
+        stage('1. Git Checkout') {
+            steps {
+                script {
+                    executeStageWithTracking('Git Checkout') {
+                        git branch: 'main', url: 'https://github.com/ibrahimimohamed2108/erp-clone.git'
+                    }
+                }
+            }
+        }
+
+        stage('2. Install npm') {
+            steps {
+                script {
+                    executeStageWithTracking('Install npm') {
+                        sh 'npm install'
+                    }
+                }
+            }
+        }
+
+        stage('3. Trivy Scan') {
+            steps {
+                script {
+                    executeStageWithTracking('Trivy Scan') {
+                        sh "trivy fs . > trivy.txt"
+                    }
+                }
+            }
+        }
+
+        stage('4. Build Docker Image') {
+            steps {
+                script {
+                    executeStageWithTracking('Build Docker Image') {
+                        sh "docker build -t ${params.ECR_REPO_NAME} ."
+                    }
+                }
+            }
+        }
+
+        stage('5. Create ECR repo') {
+            steps {
+                script {
+                    executeStageWithTracking('Create ECR repo') {
+                        withCredentials([
+                            string(credentialsId: 'access-key', variable: 'AWS_ACCESS_KEY'),
+                            string(credentialsId: 'secret-key', variable: 'AWS_SECRET_KEY')
+                        ]) {
+                            sh """
+                            set -e
+                            aws configure set aws_access_key_id $AWS_ACCESS_KEY
+                            aws configure set aws_secret_access_key $AWS_SECRET_KEY
+                            aws ecr describe-repositories --repository-names ${params.ECR_REPO_NAME} --region us-east-1 || \
+                            aws ecr create-repository --repository-name ${params.ECR_REPO_NAME} --region us-east-1
+                            """
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('6. Login to ECR & tag image') {
+            steps {
+                script {
+                    executeStageWithTracking('Login to ECR & tag image') {
+                        withCredentials([
+                            string(credentialsId: 'access-key', variable: 'AWS_ACCESS_KEY'),
+                            string(credentialsId: 'secret-key', variable: 'AWS_SECRET_KEY')
+                        ]) {
+                            sh """
+                            set -e
+                            aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin ${params.AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com
+                            docker tag ${params.ECR_REPO_NAME} ${params.AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/${params.ECR_REPO_NAME}:${BUILD_NUMBER}
+                            docker tag ${params.ECR_REPO_NAME} ${params.AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/${params.ECR_REPO_NAME}:latest
+                            """
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('7. Push image to ECR') {
+            steps {
+                script {
+                    executeStageWithTracking('Push image to ECR') {
+                        withCredentials([
+                            string(credentialsId: 'access-key', variable: 'AWS_ACCESS_KEY'),
+                            string(credentialsId: 'secret-key', variable: 'AWS_SECRET_KEY')
+                        ]) {
+                            sh """
+                            set -e
+                            docker push ${params.AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/${params.ECR_REPO_NAME}:${BUILD_NUMBER}
+                            docker push ${params.AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/${params.ECR_REPO_NAME}:latest
+                            """
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('8. Cleanup Images') {
+            steps {
+                script {
+                    executeStageWithTracking('Cleanup Images') {
+                        sh """
+                        docker rmi ${params.AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/${params.ECR_REPO_NAME}:${BUILD_NUMBER} || true
+                        docker rmi ${params.AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/${params.ECR_REPO_NAME}:latest || true
+                        docker images
+                        """
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            script {
+                def buildStatus = currentBuild.currentResult
+                def htmlBody = generateEmailBody(buildStatus, stageResults)
+
+                emailext (
+                    subject: "Jenkins Build: ${buildStatus} - Job ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                    body: htmlBody,
+                    mimeType: 'text/html',
+                    to: 'ibrahimi.mohamed@student.emi.ac.ma, simparamohamedelbechir7@gmail.com'
+                )
+            }
+        }
+    }
+}
+
+// ========== Helper Functions ==========
+
 def stageResults = [:]
 
 def recordStageResult(stageName, status) {
@@ -22,15 +173,14 @@ def generateEmailBody(buildStatus, stageResults) {
 <head>
     <style>
         body { font-family: Arial, sans-serif; margin: 20px; }
-        .header { background-color: ${buildStatus == 'SUCCESS' ? '#d4edda' : '#f8d7da'}; 
-                 color: ${buildStatus == 'SUCCESS' ? '#155724' : '#721c24'}; 
-                 padding: 15px; border-radius: 5px; margin-bottom: 20px; }
+        .header { background-color: ${buildStatus == 'SUCCESS' ? '#d4edda' : '#f8d7da'};
+                  color: ${buildStatus == 'SUCCESS' ? '#155724' : '#721c24'};
+                  padding: 15px; border-radius: 5px; margin-bottom: 20px; }
         .summary-table { width: 100%; border-collapse: collapse; margin: 20px 0; }
         .summary-table th, .summary-table td { border: 1px solid #ddd; padding: 12px; text-align: left; }
         .summary-table th { background-color: #f2f2f2; font-weight: bold; }
         .success { color: #28a745; font-weight: bold; }
         .failed { color: #dc3545; font-weight: bold; }
-        .skipped { color: #6c757d; font-weight: bold; }
         .build-info { background-color: #e9ecef; padding: 15px; border-radius: 5px; margin: 20px 0; }
     </style>
 </head>
@@ -39,7 +189,7 @@ def generateEmailBody(buildStatus, stageResults) {
         <h2>🚀 Jenkins Pipeline Execution Report</h2>
         <p><strong>Build Status:</strong> ${buildStatus}</p>
     </div>
-    
+
     <div class="build-info">
         <h3>📋 Build Information</h3>
         <ul>
@@ -48,11 +198,10 @@ def generateEmailBody(buildStatus, stageResults) {
             <li><strong>Build URL:</strong> <a href="${env.BUILD_URL}">${env.BUILD_URL}</a></li>
             <li><strong>Repository:</strong> emierp</li>
             <li><strong>Branch:</strong> main</li>
-            <li><strong>Duration:</strong> ${currentBuild.durationString}</li>
             <li><strong>Started by:</strong> ${env.BUILD_USER_ID ?: 'System'}</li>
         </ul>
     </div>
-    
+
     <h3>📊 Stage Execution Summary</h3>
     <table class="summary-table">
         <thead>
@@ -64,7 +213,7 @@ def generateEmailBody(buildStatus, stageResults) {
         </thead>
         <tbody>
 """
-    
+
     def stageDescriptions = [
         'Git Checkout': 'Source code checkout from GitHub repository',
         'Install npm': 'Node.js dependencies installation',
@@ -75,7 +224,7 @@ def generateEmailBody(buildStatus, stageResults) {
         'Push image to ECR': 'Docker image push to ECR registry',
         'Cleanup Images': 'Local Docker images cleanup'
     ]
-    
+
     stageResults.each { stageName, status ->
         def statusClass = status.toLowerCase()
         def statusIcon = status == 'SUCCESS' ? '✅' : (status == 'FAILED' ? '❌' : '⏭️')
@@ -87,306 +236,40 @@ def generateEmailBody(buildStatus, stageResults) {
             </tr>
         """
     }
-    
+
     emailBody += """
         </tbody>
     </table>
-    
+
     <div style="margin-top: 30px; padding: 15px; background-color: #f8f9fa; border-radius: 5px;">
         <h4>🔧 Next Steps:</h4>
         <ul>
-"""
-    
+    """
+
     if (buildStatus == 'SUCCESS') {
         emailBody += """
             <li>✅ Your application has been successfully deployed to ECR</li>
-            <li>🚀 You can now proceed with your deployment to staging/production</li>
-            <li>📊 Review the build logs for any warnings or optimization opportunities</li>
+            <li>🚀 You can now proceed with deployment</li>
+            <li>📊 Review logs for optimization</li>
         """
     } else {
         emailBody += """
-            <li>🔍 Check the failed stage(s) in the Jenkins console output</li>
-            <li>🛠️ Fix the issues and trigger a new build</li>
-            <li>📞 Contact the DevOps team if you need assistance</li>
+            <li>🔍 Check the failed stage(s) in Jenkins output</li>
+            <li>🛠️ Fix issues and retry</li>
+            <li>📞 Contact DevOps if needed</li>
         """
     }
-    
+
     emailBody += """
         </ul>
     </div>
-    
+
     <div style="margin-top: 20px; font-size: 12px; color: #6c757d;">
-        <p>This is an automated message from Jenkins CI/CD Pipeline. Please do not reply to this email.</p>
+        <p>This is an automated message from Jenkins CI/CD Pipeline. Please do not reply.</p>
         <p>Generated on: ${new Date().format('yyyy-MM-dd HH:mm:ss')} UTC</p>
     </div>
 </body>
 </html>
 """
     return emailBody
-}
-
-pipeline {
-    agent any
-    
-    parameters {
-        string(name: 'ECR_REPO_NAME', defaultValue: 'emierp', description: 'Enter repository name')
-        string(name: 'AWS_ACCOUNT_ID', defaultValue: '409556542010', description: 'Enter AWS Account ID')
-    }
-    
-    tools {
-        jdk 'JDK'
-        nodejs 'NodeJS'
-    }
-    
-    environment {
-        // SCANNER_HOME = tool 'SonarQube Scanner'
-        EMAIL_RECIPIENTS = 'ibrahimi.mohamed@student.emi.ac.ma,simparamohamedelbechir7@gmail.com'
-    }
-    
-    stages {
-        stage('1. Git Checkout') {
-            steps {
-                script {
-                    executeStageWithTracking('Git Checkout') {
-                        git branch: 'main', url: 'https://github.com/ibrahimimohamed2108/erp-clone.git'
-                    }
-                }
-            }
-        }
-        
-        /*stage('2. SonarQube Analysis') {
-            steps {
-                script {
-                    executeStageWithTracking('SonarQube Analysis') {
-                        withSonarQubeEnv ('sonar-server') {
-                            sh """
-                            $SCANNER_HOME/bin/sonar-scanner \
-                            -Dsonar.projectName=emierp \
-                            -Dsonar.projectKey=emierp
-                            """
-                        }
-                    }
-                }
-            }
-        }
-        
-        stage('3. Quality Gate') {
-            steps {
-                script {
-                    executeStageWithTracking('Quality Gate') {
-                        waitForQualityGate abortPipeline: false, 
-                        credentialsId: 'sonar-token'
-                    }
-                }
-            }
-        }*/
-        
-        stage('4. Install npm') {
-            steps {
-                script {
-                    executeStageWithTracking('Install npm') {
-                        sh "npm install"
-                    }
-                }
-            }
-        }
-        
-        stage('5. Trivy Scan') {
-            steps {
-                script {
-                    executeStageWithTracking('Trivy Scan') {
-                        sh "trivy fs . > trivy.txt"
-                        
-                        // Archive the scan results
-                        archiveArtifacts artifacts: 'trivy.txt', 
-                                       allowEmptyArchive: true,
-                                       fingerprint: true
-                    }
-                }
-            }
-        }
-        
-        stage('6. Build Docker Image') {
-            steps {
-                script {
-                    executeStageWithTracking('Build Docker Image') {
-                        sh "docker build -t ${params.ECR_REPO_NAME} ."
-                        
-                        // Verify image was built successfully
-                        sh "docker images ${params.ECR_REPO_NAME}"
-                    }
-                }
-            }
-        }
-        
-        stage('7. Create ECR repo') {
-            steps {
-                script {
-                    executeStageWithTracking('Create ECR repo') {
-                        withCredentials([
-                            string(credentialsId: 'access-key', variable: 'AWS_ACCESS_KEY'), 
-                            string(credentialsId: 'secret-key', variable: 'AWS_SECRET_KEY')
-                        ]) {
-                            sh """
-                            aws configure set aws_access_key_id $AWS_ACCESS_KEY
-                            aws configure set aws_secret_access_key $AWS_SECRET_KEY
-                            aws configure set region us-east-1
-                            aws configure set output json
-                            
-                            # Check if repository exists, create if it doesn't
-                            if ! aws ecr describe-repositories --repository-names ${params.ECR_REPO_NAME} --region us-east-1 >/dev/null 2>&1; then
-                                echo "Creating ECR repository: ${params.ECR_REPO_NAME}"
-                                aws ecr create-repository --repository-name ${params.ECR_REPO_NAME} --region us-east-1
-                            else
-                                echo "ECR repository ${params.ECR_REPO_NAME} already exists"
-                            fi
-                            """
-                        }
-                    }
-                }
-            }
-        }
-        
-        stage('8. Login to ECR & tag image') {
-            steps {
-                script {
-                    executeStageWithTracking('Login to ECR & tag image') {
-                        withCredentials([
-                            string(credentialsId: 'access-key', variable: 'AWS_ACCESS_KEY'), 
-                            string(credentialsId: 'secret-key', variable: 'AWS_SECRET_KEY')
-                        ]) {
-                            sh """
-                            # Login to ECR
-                            aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin ${params.AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com
-                            
-                            # Tag images
-                            docker tag ${params.ECR_REPO_NAME} ${params.AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/${params.ECR_REPO_NAME}:${BUILD_NUMBER}
-                            docker tag ${params.ECR_REPO_NAME} ${params.AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/${params.ECR_REPO_NAME}:latest
-                            
-                            # Verify tags
-                            echo "Tagged images:"
-                            docker images ${params.AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/${params.ECR_REPO_NAME}
-                            """
-                        }
-                    }
-                }
-            }
-        }
-        
-        stage('9. Push image to ECR') {
-            steps {
-                script {
-                    executeStageWithTracking('Push image to ECR') {
-                        withCredentials([
-                            string(credentialsId: 'access-key', variable: 'AWS_ACCESS_KEY'), 
-                            string(credentialsId: 'secret-key', variable: 'AWS_SECRET_KEY')
-                        ]) {
-                            sh """
-                            echo "Pushing image with build number: ${BUILD_NUMBER}"
-                            docker push ${params.AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/${params.ECR_REPO_NAME}:${BUILD_NUMBER}
-                            
-                            echo "Pushing latest image"
-                            docker push ${params.AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/${params.ECR_REPO_NAME}:latest
-                            
-                            echo "Images pushed successfully to ECR"
-                            """
-                        }
-                    }
-                }
-            }
-        }
-        
-        stage('10. Cleanup Images') {
-            steps {
-                script {
-                    executeStageWithTracking('Cleanup Images') {
-                        sh """
-                        echo "Cleaning up local Docker images..."
-                        
-                        # Remove tagged images
-                        docker rmi ${params.AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/${params.ECR_REPO_NAME}:${BUILD_NUMBER} || true
-                        docker rmi ${params.AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/${params.ECR_REPO_NAME}:latest || true
-                        docker rmi ${params.ECR_REPO_NAME} || true
-                        
-                        # Clean up dangling images
-                        docker image prune -f || true
-                        
-                        echo "Remaining images:"
-                        docker images
-                        """
-                    }
-                }
-            }
-        }
-    }
-    
-    post {
-        always {
-            script {
-                // Determine overall build status
-                def buildStatus = currentBuild.currentResult ?: 'SUCCESS'
-                
-                // Mark any unexecuted stages as SKIPPED
-                def expectedStages = [
-                    'Git Checkout', 'Install npm', 'Trivy Scan', 
-                    'Build Docker Image', 'Create ECR repo', 
-                    'Login to ECR & tag image', 'Push image to ECR', 'Cleanup Images'
-                ]
-                
-                expectedStages.each { stageName ->
-                    if (!stageResults.containsKey(stageName)) {
-                        stageResults[stageName] = 'SKIPPED'
-                    }
-                }
-                
-                // Generate email subject
-                def emailSubject = "[Jenkins] ${buildStatus}: ${env.JOB_NAME} - Build #${env.BUILD_NUMBER}"
-                
-                // Generate email body
-                def emailBody = generateEmailBody(buildStatus, stageResults)
-                
-                // Send email notification
-                try {
-                    emailext (
-                        subject: emailSubject,
-                        body: emailBody,
-                        mimeType: 'text/html',
-                        to: env.EMAIL_RECIPIENTS,
-                        replyTo: 'noreply@yourcompany.com',
-                        attachLog: buildStatus != 'SUCCESS', // Attach logs only if build failed
-                        compressLog: true
-                    )
-                    echo "Email notification sent successfully to: ${env.EMAIL_RECIPIENTS}"
-                } catch (Exception e) {
-                    echo "Failed to send email notification: ${e.getMessage()}"
-                    // Don't fail the build if email sending fails
-                }
-                
-                // Print summary to console
-                echo "\n" + "="*50
-                echo "PIPELINE EXECUTION SUMMARY"
-                echo "="*50
-                echo "Build Status: ${buildStatus}"
-                echo "Build Number: ${env.BUILD_NUMBER}"
-                echo "Job Name: ${env.JOB_NAME}"
-                echo "\nStage Results:"
-                stageResults.each { stageName, status ->
-                    echo "  ${stageName}: ${status}"
-                }
-                echo "="*50
-            }
-        }
-        
-        success {
-            echo "🎉 Pipeline completed successfully! Docker image pushed to ECR."
-        }
-        
-        failure {
-            echo "❌ Pipeline failed. Check the logs and stage results above."
-        }
-        
-        unstable {
-            echo "⚠️ Pipeline completed with warnings. Please review the results."
-        }
-    }
 }
