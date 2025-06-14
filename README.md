@@ -14,6 +14,7 @@ This project demonstrates deploying an emierp clone using a set of DevOps tools 
 - **AWS ECR**: Repository to store Docker images.
 - **AWS EKS**: Container management platform.
 - **ArgoCD**: Continuous deployment tool.
+- **SMTP** : Google smtp service to send notifications to devloppment team.
 - **Prometheus & Grafana**: Monitoring and alerting tools.
 
 ## Pre-requisites
